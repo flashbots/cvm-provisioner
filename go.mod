@@ -2,7 +2,10 @@ module github.com/flashbots/cvm-provisioner
 
 go 1.22
 
-require github.com/google/go-tdx-guest v0.3.2-0.20260429190344-e17c4fddae24
+require (
+	github.com/google/go-tdx-guest v0.3.2-0.20260429190344-e17c4fddae24
+	golang.org/x/term v0.15.0
+)
 
 require (
 	github.com/google/go-configfs-tsm v0.3.2 // indirect

@@ -7,17 +7,13 @@ import (
 	"os/exec"
 )
 
-type Runner struct {
-	// Dir contains compose.yaml (and optionally .env).
-	Dir string
-}
-
-func (r Runner) Up() error {
-	if _, err := os.Stat(r.Dir + "/compose.yaml"); err != nil {
-		return fmt.Errorf("compose.yaml missing in %s: %w", r.Dir, err)
+// Up runs `podman-compose -f compose.yaml up -d` in dir.
+func Up(dir string) error {
+	if _, err := os.Stat(dir + "/compose.yaml"); err != nil {
+		return fmt.Errorf("compose.yaml missing in %s: %w", dir, err)
 	}
 	cmd := exec.Command("podman-compose", "-f", "compose.yaml", "up", "-d")
-	cmd.Dir = r.Dir
+	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -26,9 +22,10 @@ func (r Runner) Up() error {
 	return nil
 }
 
-func (r Runner) Down() error {
+// Down runs `podman-compose -f compose.yaml down` in dir.
+func Down(dir string) error {
 	cmd := exec.Command("podman-compose", "-f", "compose.yaml", "down")
-	cmd.Dir = r.Dir
+	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
