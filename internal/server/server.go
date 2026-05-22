@@ -283,7 +283,9 @@ func (s *Server) handleReboot(w http.ResponseWriter, _ *http.Request) {
 	log.Printf("reboot requested")
 	go func() {
 		// Detach so the HTTP response can flush first.
-		if err := exec.Command("/sbin/reboot").Run(); err != nil {
+		// systemctl rather than /sbin/reboot because the cvm-base image does
+		// not install systemd-sysv (no SysV-compat symlinks).
+		if err := exec.Command("/usr/bin/systemctl", "reboot").Run(); err != nil {
 			log.Printf("reboot exec: %v", err)
 		}
 	}()
