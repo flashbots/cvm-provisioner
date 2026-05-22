@@ -1,41 +1,86 @@
 // Package state manages on-disk persistence of the deployed manifest plus
-// a tmpfs flag that survives service restart but not TD reboot. The split
-// ensures that systemd restarts do not double-extend RTMR3 within one boot,
-// while a TD reboot deterministically replays the manifest from disk.
+// a tmpfs flag that survives service restart but not TD reboot.
+//
+// v1: PersistentDir is set by Promote() once /init succeeds. Before Promote,
+// the store rejects writes. The same mechanism serves both modes:
+//   - ephemeral: Promote(/run/cvm-provisioner/state) — state lives on tmpfs.
+//   - persistent: Promote(/persistent/cvm-provisioner) — state survives reboot.
 package state
 
 import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 type Store struct {
-	// PersistentDir survives TD reboot (e.g. /persistent for the LUKS-backed
-	// disk in v1; /var/lib/cvm-provisioner in v0 — best-effort only).
-	PersistentDir string
-
-	// RuntimeDir lives on tmpfs (e.g. /run/cvm-provisioner). Used to track
-	// that RTMR3 has already been extended this boot.
-	RuntimeDir string
+	mu            sync.RWMutex
+	persistentDir string
+	runtimeDir    string
 }
 
-func (s Store) ComposePath() string  { return filepath.Join(s.PersistentDir, "compose.yaml") }
-func (s Store) EnvPath() string      { return filepath.Join(s.PersistentDir, ".env") }
-func (s Store) ExtendedFlag() string { return filepath.Join(s.RuntimeDir, "extended") }
+func New(runtimeDir string) *Store { return &Store{runtimeDir: runtimeDir} }
 
-func (s Store) HasCompose() bool {
-	_, err := os.Stat(s.ComposePath())
+func (s *Store) Promote(dir string) error {
+	if dir == "" {
+		return errors.New("promote: empty dir")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.persistentDir = dir
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Store) PersistentDir() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.persistentDir
+}
+
+func (s *Store) IsPromoted() bool { return s.PersistentDir() != "" }
+
+func (s *Store) ComposePath() string {
+	if d := s.PersistentDir(); d != "" {
+		return filepath.Join(d, "compose.yaml")
+	}
+	return ""
+}
+
+func (s *Store) EnvPath() string {
+	if d := s.PersistentDir(); d != "" {
+		return filepath.Join(d, ".env")
+	}
+	return ""
+}
+
+func (s *Store) ExtendedFlag() string {
+	return filepath.Join(s.runtimeDir, "extended")
+}
+
+func (s *Store) HasCompose() bool {
+	p := s.ComposePath()
+	if p == "" {
+		return false
+	}
+	_, err := os.Stat(p)
 	return err == nil
 }
 
-func (s Store) ReadCompose() ([]byte, error) {
-	return os.ReadFile(s.ComposePath())
+func (s *Store) ReadCompose() ([]byte, error) {
+	p := s.ComposePath()
+	if p == "" {
+		return nil, errors.New("persistent storage not initialized")
+	}
+	return os.ReadFile(p)
 }
 
-func (s Store) WriteCompose(compose, env []byte) error {
-	if err := os.MkdirAll(s.PersistentDir, 0o700); err != nil {
-		return err
+func (s *Store) WriteCompose(compose, env []byte) error {
+	if !s.IsPromoted() {
+		return errors.New("persistent storage not initialized")
 	}
 	if err := writeAtomic(s.ComposePath(), compose, 0o600); err != nil {
 		return err
@@ -48,19 +93,19 @@ func (s Store) WriteCompose(compose, env []byte) error {
 	return nil
 }
 
-func (s Store) AlreadyExtended() bool {
+func (s *Store) AlreadyExtended() bool {
 	_, err := os.Stat(s.ExtendedFlag())
 	return err == nil
 }
 
-func (s Store) MarkExtended(digestHex string) error {
-	if err := os.MkdirAll(s.RuntimeDir, 0o700); err != nil {
+func (s *Store) MarkExtended(digestHex string) error {
+	if err := os.MkdirAll(s.runtimeDir, 0o700); err != nil {
 		return err
 	}
 	return os.WriteFile(s.ExtendedFlag(), []byte(digestHex+"\n"), 0o600)
 }
 
-func (s Store) ReadExtendedDigest() (string, error) {
+func (s *Store) ReadExtendedDigest() (string, error) {
 	b, err := os.ReadFile(s.ExtendedFlag())
 	if err != nil {
 		return "", err
@@ -69,9 +114,6 @@ func (s Store) ReadExtendedDigest() (string, error) {
 }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	if path == "" {
-		return errors.New("empty path")
-	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, mode); err != nil {
 		return err
